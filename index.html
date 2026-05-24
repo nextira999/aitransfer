@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>로컬 AI 무제한 번역기</title>
+    <style>
+        :root {
+            --bg-color: #f4f4f9;
+            --primary: #4a90e2;
+            --text-color: #333;
+            --border: #ddd;
+        }
+        body {
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            width: 100%;
+            max-width: 900px;
+        }
+        h1 {
+            text-align: center;
+            font-size: 1.8rem;
+            margin-bottom: 5px;
+        }
+        p.subtitle {
+            text-align: center;
+            color: #666;
+            font-size: 0.95rem;
+            margin-bottom: 25px;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        select, button {
+            padding: 12px 20px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-size: 1rem;
+        }
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+            min-width: 150px;
+        }
+        button:hover {
+            background-color: #357abd;
+        }
+        button:disabled {
+            background-color: #a0c4e8;
+            cursor: not-allowed;
+        }
+        .panels {
+            display: flex;
+            gap: 20px;
+            flex-direction: column;
+        }
+        @media(min-width: 768px) {
+            .panels { flex-direction: row; }
+        }
+        textarea {
+            flex: 1;
+            min-height: 250px;
+            padding: 15px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            resize: vertical;
+            font-size: 1.05rem;
+            line-height: 1.6;
+        }
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+        #status {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.95rem;
+            color: #d9534f;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>로컬 AI 번역기 🌍</h1>
+        <p class="subtitle">서버 전송 없이 브라우저에서 직접 구동됩니다. 무제한으로 안전하게 번역하세요.</p>
+        
+        <div class="controls">
+            <select id="direction">
+                <option value="en2ko">영어 ➔ 한국어</option>
+                <option value="ko2en">한국어 ➔ 영어</option>
+            </select>
+            <button id="translateBtn" disabled>모델 로딩 중...</button>
+        </div>
+
+        <div class="panels">
+            <textarea id="inputText" placeholder="번역할 내용을 입력하세요. (글자 수 제한 없음)"></textarea>
+            <textarea id="outputText" placeholder="번역 결과가 실시간으로 표시됩니다." readonly></textarea>
+        </div>
+        
+        <div id="status">최초 실행 시 AI 모델(약 600MB)을 다운로드하므로 다소 시간이 걸릴 수 있습니다. (이후에는 캐시되어 즉시 실행됨)</div>
+    </div>
+
+    <!-- Transformers.js 라이브러리 불러오기 -->
+    <script type="module">
+        import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js';
+
+        // 로컬 파일 시스템 대신 Hugging Face Hub의 모델을 사용하도록 설정
+        env.allowLocalModels = false;
+
+        const translateBtn = document.getElementById('translateBtn');
+        const inputText = document.getElementById('inputText');
+        const outputText = document.getElementById('outputText');
+        const directionSelect = document.getElementById('direction');
+        const statusDiv = document.getElementById('status');
+
+        let translator = null;
+
+        // 모델 로드 함수
+        async function loadModel() {
+            try {
+                // 메타(Meta)의 NLLB-200 기반 가벼운 번역 모델
+                translator = await pipeline('translation', 'Xenova/nllb-200-distilled-600M');
+                translateBtn.innerText = '번역하기';
+                translateBtn.disabled = false;
+                statusDiv.innerText = '✅ 모델 로딩 완료! 인터넷 없이도 번역이 가능합니다.';
+                statusDiv.style.color = '#5cb85c';
+            } catch (error) {
+                statusDiv.innerText = '❌ 모델 로딩 실패: ' + error.message;
+            }
+        }
+
+        // NLLB 모델용 언어 코드
+        const langMap = {
+            'en2ko': { src: 'eng_Latn', tgt: 'kor_Hang' },
+            'ko2en': { src: 'kor_Hang', tgt: 'eng_Latn' }
+        };
+
+        // 번역 실행 로직
+        translateBtn.addEventListener('click', async () => {
+            const text = inputText.value.trim();
+            if (!text) return;
+
+            const dir = directionSelect.value;
+            const { src, tgt } = langMap[dir];
+
+            translateBtn.disabled = true;
+            translateBtn.innerText = '번역 중...';
+            outputText.value = '';
+            statusDiv.innerText = '⏳ 번역을 진행하고 있습니다. 잠시만 기다려주세요...';
+            statusDiv.style.color = '#f0ad4e';
+
+            try {
+                // 글자 수 제한을 우회하기 위해 텍스트를 줄바꿈 기준으로 청크(조각)로 분할
+                const chunks = text.split('\n');
+                let resultText = '';
+
+                for (let i = 0; i < chunks.length; i++) {
+                    const chunk = chunks[i].trim();
+                    if (chunk === '') {
+                        resultText += '\n'; // 빈 줄 유지
+                        continue;
+                    }
+
+                    // 각 청크를 순차적으로 번역
+                    const output = await translator(chunk, {
+                        src_lang: src,
+                        tgt_lang: tgt,
+                    });
+                    
+                    resultText += output[0].translation_text + '\n';
+                    // 번역되는 대로 실시간으로 화면에 결과 업데이트
+                    outputText.value = resultText;
+                }
+                statusDiv.innerText = '✅ 번역이 완료되었습니다.';
+                statusDiv.style.color = '#5cb85c';
+
+            } catch (error) {
+                statusDiv.innerText = '❌ 번역 중 오류 발생: ' + error.message;
+                statusDiv.style.color = '#d9534f';
+            } finally {
+                translateBtn.disabled = false;
+                translateBtn.innerText = '번역하기';
+            }
+        });
+
+        // 페이지 로드 시 즉시 모델 다운로드/로딩 시작
+        loadModel();
+    </script>
+</body>
+</html>
