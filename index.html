@@ -42,6 +42,36 @@
             font-size: 0.95rem;
             margin-bottom: 25px;
         }
+        
+        /* 프로그레스 바 UI 스타일 추가 */
+        .progress-container {
+            display: none; /* 초기에는 숨김 */
+            background-color: #f0f0f0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        progress {
+            width: 100%;
+            height: 10px;
+            border-radius: 5px;
+            margin-bottom: 8px;
+        }
+        progress::-webkit-progress-bar {
+            background-color: #ddd;
+            border-radius: 5px;
+        }
+        progress::-webkit-progress-value {
+            background-color: var(--primary);
+            border-radius: 5px;
+        }
+        #progress-text {
+            font-size: 0.9rem;
+            color: #555;
+            word-break: break-all;
+        }
+
         .controls {
             display: flex;
             justify-content: center;
@@ -106,6 +136,12 @@
         <h1>로컬 AI 번역기 🌍</h1>
         <p class="subtitle">서버 전송 없이 브라우저에서 직접 구동됩니다. 무제한으로 안전하게 번역하세요.</p>
         
+        <!-- 진행률 표시 영역 -->
+        <div id="progressContainer" class="progress-container">
+            <progress id="progressBar" max="100" value="0"></progress>
+            <div id="progressText">모델 다운로드를 준비 중입니다...</div>
+        </div>
+
         <div class="controls">
             <select id="direction">
                 <option value="en2ko">영어 ➔ 한국어</option>
@@ -122,11 +158,9 @@
         <div id="status">최초 실행 시 AI 모델(약 600MB)을 다운로드하므로 다소 시간이 걸릴 수 있습니다. (이후에는 캐시되어 즉시 실행됨)</div>
     </div>
 
-    <!-- Transformers.js 라이브러리 불러오기 -->
     <script type="module">
         import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js';
 
-        // 로컬 파일 시스템 대신 Hugging Face Hub의 모델을 사용하도록 설정
         env.allowLocalModels = false;
 
         const translateBtn = document.getElementById('translateBtn');
@@ -134,30 +168,53 @@
         const outputText = document.getElementById('outputText');
         const directionSelect = document.getElementById('direction');
         const statusDiv = document.getElementById('status');
+        
+        // 프로그레스 관련 요소
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
 
         let translator = null;
 
-        // 모델 로드 함수
         async function loadModel() {
             try {
-                // 메타(Meta)의 NLLB-200 기반 가벼운 번역 모델
-                translator = await pipeline('translation', 'Xenova/nllb-200-distilled-600M');
+                // 다운로드 콜백을 추가하여 모델 로드
+                translator = await pipeline('translation', 'Xenova/nllb-200-distilled-600M', {
+                    progress_callback: (x) => {
+                        // 프로그레스 바 영역 표시
+                        progressContainer.style.display = 'block';
+                        statusDiv.innerText = '필요한 AI 모델 파일을 다운로드하고 있습니다...';
+                        statusDiv.style.color = '#f0ad4e';
+
+                        if (x.status === 'initiate') {
+                            progressText.innerText = `[대기 중] ${x.file}`;
+                        } else if (x.status === 'progress') {
+                            progressBar.value = x.progress;
+                            progressText.innerText = `[다운로드 중] ${x.file} (${Math.round(x.progress)}%)`;
+                        } else if (x.status === 'done') {
+                            progressText.innerText = `[완료] ${x.file}`;
+                        } else if (x.status === 'ready') {
+                            // 모든 다운로드 및 준비 완료
+                            progressContainer.style.display = 'none';
+                        }
+                    }
+                });
+
                 translateBtn.innerText = '번역하기';
                 translateBtn.disabled = false;
                 statusDiv.innerText = '✅ 모델 로딩 완료! 인터넷 없이도 번역이 가능합니다.';
                 statusDiv.style.color = '#5cb85c';
             } catch (error) {
+                progressContainer.style.display = 'none';
                 statusDiv.innerText = '❌ 모델 로딩 실패: ' + error.message;
             }
         }
 
-        // NLLB 모델용 언어 코드
         const langMap = {
             'en2ko': { src: 'eng_Latn', tgt: 'kor_Hang' },
             'ko2en': { src: 'kor_Hang', tgt: 'eng_Latn' }
         };
 
-        // 번역 실행 로직
         translateBtn.addEventListener('click', async () => {
             const text = inputText.value.trim();
             if (!text) return;
@@ -172,25 +229,22 @@
             statusDiv.style.color = '#f0ad4e';
 
             try {
-                // 글자 수 제한을 우회하기 위해 텍스트를 줄바꿈 기준으로 청크(조각)로 분할
                 const chunks = text.split('\n');
                 let resultText = '';
 
                 for (let i = 0; i < chunks.length; i++) {
                     const chunk = chunks[i].trim();
                     if (chunk === '') {
-                        resultText += '\n'; // 빈 줄 유지
+                        resultText += '\n';
                         continue;
                     }
 
-                    // 각 청크를 순차적으로 번역
                     const output = await translator(chunk, {
                         src_lang: src,
                         tgt_lang: tgt,
                     });
                     
                     resultText += output[0].translation_text + '\n';
-                    // 번역되는 대로 실시간으로 화면에 결과 업데이트
                     outputText.value = resultText;
                 }
                 statusDiv.innerText = '✅ 번역이 완료되었습니다.';
@@ -205,7 +259,6 @@
             }
         });
 
-        // 페이지 로드 시 즉시 모델 다운로드/로딩 시작
         loadModel();
     </script>
 </body>
